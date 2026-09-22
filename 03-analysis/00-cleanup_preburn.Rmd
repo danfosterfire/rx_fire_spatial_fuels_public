@@ -1,0 +1,1062 @@
+---
+title: "cleanup"
+author: "Natalie Coy & Danny Foster"
+date: "7/13/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+
+#### install packages ##########################################################
+library(tidyverse)
+library(here)
+library(readxl)
+library(ggplot2)
+
+
+#### load data #################################################################
+#need to update filepath when there is new data imported 
+filepath = 
+  here("02-data", "00-source", "preburn", "CARB_datasheets_final.xls")
+
+plot_metadata <- 
+  read_excel(filepath, 
+             sheet = "plot_metadata", 
+             col_types = c("text", "text", "text", "numeric", "numeric", 
+                           "numeric", "numeric", "numeric", "text", "numeric", 
+                           "date", "numeric", "numeric", "numeric", "date"))
+
+cwd <- 
+  read_excel(filepath, 
+             sheet="cwd", 
+             col_types = c("text", "text", "text", "numeric", "numeric", 
+                           "numeric", "numeric", "numeric", "text", "text"))
+
+fwd_tallies <- 
+  read_excel(filepath, 
+             sheet="fwd_tallies", 
+             col_types = c("text", "text", "text", "numeric", "numeric", 
+                           "numeric", "numeric", "numeric", "numeric", "numeric"))
+# NAs investigated during cleaning
+
+
+fwd_diams <- 
+  read_excel(filepath, 
+             sheet="fwd_diams", 
+             col_types = c("text", "text", "text", "numeric"))
+
+litter_duff <- 
+  read_excel(filepath, 
+             sheet="litter_duff", 
+             col_types = c("text", "text", "text", "numeric", "numeric", 
+                           "numeric"))
+
+shrubs <- 
+  read_excel(filepath, 
+             sheet="shrubs", 
+             col_types = c("text", "text", "text", "numeric", "numeric", 
+                           "text", "numeric", "numeric", "numeric", "text"))
+
+trees <- 
+  read_excel(filepath, 
+             sheet="trees", col_types = c("text", "text", "numeric", 
+                                          "numeric", "text", "numeric", 
+                                          "numeric", "numeric", "numeric", 
+                                          "text", "text", "text"))
+
+pres_abs_2 <- 
+  read_excel(filepath, 
+             sheet = "pres_abs_2", 
+             col_types = c("text", "text", "text", "numeric", "numeric", 
+                           "numeric", "numeric", "numeric", "numeric"))
+
+pres_abs <- 
+  read_excel(filepath, 
+             sheet = "pres_abs", 
+             col_types = c("text", "text", "text", "numeric", "numeric", 
+                           "numeric", "numeric", "numeric", "numeric"))
+
+
+```
+
+
+
+
+#Data Cleaning 
+
+## Plot metadata
+
+```{r}
+head(plot_metadata)
+
+plot_metadata = 
+  plot_metadata %>%
+  # construct the observation ids PLOT and TRANSECT, format the date nicely
+  mutate(PLOT = paste0(COMP, "-", 
+                       stringr::str_pad(PLOT, width = 3, side = "left", pad = 0))) %>%
+  mutate(TRANSECT = paste0(PLOT, "-", str_pad(AZ, width = 3, side = "left", pad = 0)), 
+         AZ = as.numeric(AZ),
+         Date = as.Date(Date, format = '%Y-%m-%d')) %>%
+  
+  # keep only the most relevant columns
+  select(COMP, PLOT, TRANSECT, Date, AZ, SLP_pcent, HerbCover, comment) %>%
+  
+  # add column for out-of-bounds distance (transect extended beyond compartment)
+  mutate(max_dist_m = 30)
+
+
+# manually update a few out-of-bounds distances based on reading the sheet
+plot_metadata[plot_metadata$TRANSECT=='A-023-000','max_dist_m'] = 18.1
+plot_metadata[plot_metadata$TRANSECT=='A-024-090','max_dist_m'] = 17.0
+plot_metadata[plot_metadata$TRANSECT=='A-016-270','max_dist_m'] = 20.6
+plot_metadata[plot_metadata$TRANSECT=='C-022-270','max_dist_m'] = 17.0
+
+```
+
+## Litter and Duff 
+
+  - Litter and Duff depths should always be greater or equal to zero 
+  - Only certain valid locations 
+  - NA values okay in the Litter_cm and Duff_cm columns 
+  - no NA in COMP, PLOT, AZ, or location 
+  - COMP will be either A, B, or C 
+  - set number of rows 
+  - specific set of COMP/PLOT combinations that exist 
+  - For each plot there should be 4 different AZ values, 0, 90, 270, 360
+  - For each Comp/Plot/AZ value there should be a specific set of location values 
+  - Check for high outliers on Litter and duff depth 
+  
+
+```{r}
+head(litter_duff)
+
+#Litter and Duff depths should be >= 0, this also checks for high outliers on litter and duff  
+summary(litter_duff)
+
+litter_duff %>% 
+  filter(LITTER_cm<0 | DUFF_cm<0) 
+
+#Only a specific set of locations 
+
+valid_locations <- 
+  c(2, 2.1, 2.2, 2.3, 2.4, 2.5, 3, 3.5, 4, 4.5, 5.5, 7, 7.5, 9.5, 19.5, 29.5)
+
+litter_duff %>%
+  filter(!is.element(LOCATION, valid_locations))
+
+# NAs in litter and duff ok - locatinos with rocks/stumps/logs etc
+litter_duff %>%
+  filter(is.na(LITTER_cm) | is.na(DUFF_cm))
+
+litter_duff %>%
+  filter(is.na(COMP) | is.na(PLOT) | is.na(LOCATION))
+
+
+#COMP will be either A, B, or C 
+
+valid_COMP <- 
+  c("A", "B", "C")
+
+litter_duff %>%
+  filter(!is.element(COMP, valid_COMP))
+
+#set number of rows, there are 3 COMP with a total of 19 different plots, 
+# with four transects per plot, with 16 locations on each transect 
+#table failed the test, need to come back once the data is complete 
+length(valid_locations)
+
+valid_row_number <- 
+  19 * 4 * 16 
+
+valid_row_number == 
+  nrow(litter_duff)
+
+# there's 1 extra litter/duff sample, at 6.5m on A-21-0. I'm going to leave it in.
+valid_row_number
+nrow(litter_duff)
+
+#specific COMP/PLOT/AZ/LOCATION values; creating ID versions which are 
+# explicitly nested charater strings (TRANSECT, LOCATION), 
+# and geometry versions (displacement_m, AZ) of the transect azimuth and 
+# distance-along-transect for each observation. ID strings are to organize 
+# observations, fit aspatial random effects, etc. Geometry versions will be 
+# used to geolocate samples.
+litter_duff = litter_duff %>%
+  mutate(PLOT = paste0(COMP, "-", 
+                       stringr::str_pad(PLOT, width = 3, side = "left", pad = 0))) %>%
+  mutate(TRANSECT = paste0(PLOT, "-", str_pad(AZ, width = 3, side = "left", pad = 0)), 
+         AZ = as.numeric(AZ), 
+         Displacement_m = LOCATION, 
+         LOCATION = paste0(TRANSECT, "-", LOCATION)) %>%
+  select(COMP, PLOT, TRANSECT, LOCATION, AZ, Displacement_m, LITTER_cm, DUFF_cm)
+
+#confirm all of our LOCATION - All of the correct combinations of COMP, PLOT, TRANSECT, LOCATION
+valid_plots = c("A-001", "A-003", "A-005", "A-021", "A-023", "A-025", "A-020", "A-024", 
+                "A-028", "B-008", "B-013", "B-010", "B-016", "B-026", "C-010", 
+                "C-011", "C-025", "C-026", "C-022")
+
+valid_locations <- 
+  expand.grid(valid_plots, 
+              c("000", "090", "180", "270"), 
+              c(2, 2.1, 2.2, 2.3, 2.4, 2.5, 3, 3.5, 4, 4.5, 5.5, 7, 7.5, 9.5, 
+                19.5, 29.5)) %>%
+  select(PLOT = Var1, TRANSECT = Var2, Displacement_m = Var3) %>%
+  mutate(LOCATION = paste0(PLOT, "-", TRANSECT, "-", Displacement_m)) 
+
+#Selecting the location column from the table to use 
+#view(valid_locations)
+valid_locations = valid_locations$LOCATION
+
+#Checking for extra locations; again just the extra sample at 6.5m
+litter_duff %>%
+  filter(!is.element(LOCATION, valid_locations))
+
+#Checking for missing locations 
+valid_locations[!is.element(valid_locations,litter_duff$LOCATION)]
+
+```
+
+## FWD Tallies
+
+  - a1h, a10h, a100h, b1h, b10h, b100h columns should be >= 0 
+  - Only certain valid locations 
+  - NA values okay in the a1h, a10h, a100h, b1h, b10h, b100h columns 
+  - no NA in COMP, PLOT, AZ, or location 
+  - set number of rows 
+  - specific set of COMP/PLOT combinations that exist 
+  - For each plot there should be 4 different AZ values, 0, 90, 270, 360
+  - For each Comp/Plot/AZ value there should be a specific set of location values 
+  - Check for high outliers on a1h, a10h, a100h, b1h, b10h, b100h columns 
+
+```{r}
+head(fwd_tallies)
+#rename 8 to COMP, was entered in incorrectly 
+fwd_tallies = 
+  fwd_tallies %>%
+  select(COMP=`8`, PLOT, AZ, LOCATION, a1h, a10h, a100h, b1h, b10h, b100h)
+
+#fwd_tallies should be >=0, this also checks for high outliers 
+summary(fwd_tallies)
+
+fwd_tallies %>%
+  filter(a1h<0 | a10h<0 | a100h<0 | b1h<0| b10h<0 | b100h<0) 
+
+#Only a specific set of locations 
+valid_locations2 <-  
+  c(2.5, 3.5, 4.5, 5.5, 7.5, 9.5, 19.5, 29.5)
+
+fwd_tallies %>%
+  filter(!is.element(LOCATION, valid_locations2))
+
+#Checking for NAs; 7 NAs have been cleared; 2 missing 100h tallies, which are 
+# PROBABLY 0s but can't be sure
+#A- 023 - 000 : transect hit Comp boundary at 18.1m 
+#A- 024 - 090 : transect hit Comp boundary at 17m
+#A- 024 - 180 : data has not been entered into the spreadsheet 
+#A- 024 - 270 : leave NA if there was a stump or rock on transect 
+#B- 016 - 270 : transect hit comp boundary at 20.6m 
+#C- 022 - 270 - 9.5 : transect got an NA due to a stump or rock 
+#C- 022 - 270 - 19.5 and 29.5 : transect hit comp boundary at 17.0m 
+fwd_tallies %>%
+  filter(is.na(a1h) | is.na(a10h) | is.na(a100h) | is.na(b1h) | is.na(b10h) | is.na(b100h))
+
+
+
+fwd_tallies %>%
+ filter(is.na(COMP) | is.na(PLOT) | is.na(LOCATION) | is.na(AZ))
+
+#COMP will be either A B or C 
+valid_COMP <- 
+  c("A", "B", "C")
+
+fwd_tallies %>%
+  filter(!is.element(COMP, valid_COMP))
+
+#set number of rows, there are 3 COMP with a total of 18 different plots, with four transects per plot, with 8 locations on each transect 
+
+valid_row_number <- 
+  19 * 4 * 8 
+
+valid_row_number == 
+  nrow(fwd_tallies)
+
+valid_row_number
+nrow(fwd_tallies)
+
+##specific COMP/PLOT/AZ/LOCATION values 
+fwd_tallies = 
+  fwd_tallies %>%
+  mutate(PLOT = paste0(COMP, "-", 
+                       stringr::str_pad(PLOT, width = 3, side = "left", pad = 0))) %>%
+  mutate(TRANSECT = paste0(PLOT, "-", str_pad(AZ, width = 3, side = "left", pad = 0)), 
+         AZ = as.numeric(AZ), 
+         Displacement_m = LOCATION, 
+         LOCATION = paste0(TRANSECT, "-", LOCATION)) %>%
+  select(COMP, PLOT, TRANSECT, LOCATION, AZ, Displacement_m, a1h, a10h, a100h, b1h, b10h, b100h)
+
+#confirm all of our LOCATION - All of the correct combinations of COMP, PLOT, AZ, Displacement_m
+valid_locations2 <- 
+  expand.grid(c("A-001", "A-003", "A-005", "A-023", "A-025", "A-020", "A-024", 
+                "A-028", "B-008", "B-013", "B-010", "B-016", "B-026", "C-010", 
+                "C-011", "C-025", "C-026", "C-022"), 
+              c("000", "090", "180", "270"), 
+              c( 2.5, 3.5, 4.5, 5.5, 7.5, 9.5, 19.5, 29.5)) %>%
+  select(PLOT = Var1, TRANSECT = Var2, Displacement_m = Var3) %>%
+  mutate(LOCATION = paste0(PLOT, "-", TRANSECT, "-", Displacement_m)) 
+
+valid_locations2 = valid_locations2$LOCATION
+
+#Checking for extra locations 
+fwd_tallies %>%
+  filter(!is.element(LOCATION, valid_locations2))
+
+#Checking for missing locations 
+valid_locations2[!is.element(valid_locations2,fwd_tallies$LOCATION)]
+
+# there's one sample with a crazy high value for 100-hours:
+fwd_tallies %>%
+  filter(a100h>30)
+
+# looks like a data entry typo, where they are missing one of the subsample a
+# observations, and the 118 should be for b1h. Not sure what the missing 
+# subsample is, just set this whole row to NA
+fwd_tallies = 
+  fwd_tallies %>%
+  mutate(a1h = ifelse(a100h>30,NA,a1h),
+         a10h = ifelse(a100h>30,NA,a10h),
+         a100h = ifelse(a100h>30,NA,a100h),
+         b1h = ifelse(a100h>30,NA,b1h),
+         b10h = ifelse(a100h>30,NA,b10h),
+         b100h = ifelse(a100h>30,NA,b100h))
+
+# there's also some high values for 10h fuels, but these look legit. This is 
+# the woodrat next I think.
+fwd_tallies %>% 
+  filter(a10h >30|b10h>30)
+```
+
+## FWD diams
+  - DIAM_mm should be >= 0 
+  - Should be no NA values in any columns 
+  - COMP will be either A, B, or C 
+  - specific set of COMP/PLOT combinations that exist 
+  - For each plot there should be 4 different AZ values, 0, 90, 270, 360
+  - Check for high outliers on DIAM_mm 
+  
+```{r}
+head(fwd_diams)
+
+#DIAM_mm should be >=0, this also checks for high outliers on fwd_diams 
+#If diam is greater than 76.3mm is considered a 1000h fuel and would not be 
+# included in this table, maximum of 74mm is okay in this case 
+# identified one NA
+#the row has a blank value, with no comment in metadata likely to be a recording error 
+summary(fwd_diams)
+hist(fwd_diams$DIAM_mm)
+
+fwd_diams %>% 
+  filter(DIAM_mm<0)
+
+fwd_diams %>% 
+  filter(is.na(DIAM_mm))
+
+#decided to drop the NA value 
+fwd_diams = 
+  fwd_diams %>%
+  filter(!is.na(DIAM_mm))
+
+#COMP will either be A B or C 
+valid_COMP <- 
+  c("A", "B", "C")
+
+fwd_diams %>%
+  filter(!is.element(COMP, valid_COMP))
+
+#Specific COMP/PLOTS/AZ
+valid_transects <- 
+  expand.grid(c("A-001", "A-003", "A-005","A-021", "A-023", "A-025", "A-020", "A-024", 
+                "A-028", "B-008", "B-013", "B-010", "B-016", "B-026", "C-010", 
+                "C-011", "C-025", "C-026", "C-022"), 
+              c("000", "090", "180", "270")) %>%
+  select(PLOT = Var1, AZC = Var2)%>%
+  mutate(TRANSECT = paste0(PLOT, "-", AZC))
+
+valid_transects = valid_transects$TRANSECT
+#view(valid_transects)
+
+head(fwd_diams)
+
+#Adding a new column to fwd_diams for transect
+fwd_diams = fwd_diams %>%
+  mutate(PLOT = paste0(COMP, "-", 
+                       stringr::str_pad(PLOT, width = 3, side = "left", pad = 0))) %>%
+  mutate(TRANSECT = paste0(PLOT, "-", str_pad(AZ, width = 3, side = "left", pad = 0)), 
+         AZ = as.numeric(AZ)) %>%
+  select(COMP, PLOT, TRANSECT,  AZ, DIAM_mm)
+
+#Checking for valid transects
+fwd_diams %>%
+  filter(!is.element(TRANSECT, valid_transects))
+
+#Checking for missing transects
+# A-023-000 transect ends at 18.1m, A-024-090 and C-022-270 transects ends at 17m
+#believe data was being recorded at 19.5 m on transect; emailed crew to confirm;
+# confirmed 7-27-2020: crew was recording fwd diams consistently at 19.5m after 
+# the first day, where it was recorded at 2.5m and then either 9.5 or 19.5, probably
+# depending on who did the sample. Might have to toss those first day locations.
+valid_transects[!is.element(valid_transects,fwd_diams$TRANSECT)]
+
+
+
+```
+  
+## Shrubs 
+  - Distance_m, Maj_diam_m, minor_diam_m, height_m will be >=0 
+  - species is the only column that can have an NA value, all other columns should have no NA values
+  - COMPS wil be either A B or C 
+  - status should be either L or D 
+  - specific set of COMP/PLOT combinations that exist 
+  - check for high outliers 
+  - Location_m is >=0, and <=30 
+  - distance_m for high outliers, >=0 
+  - check species code is valid, look at unique values and fix any issues 
+  - Major diam >= Minor Diam 
+
+  
+```{r}
+head(shrubs)
+
+#Distance_m, Maj_diam_m, minor_diam_m will be >=0 
+#Maxium height of 25m seems wrong, as well max minor diam of 15.5m while max Major diam is 5.5
+summary(shrubs)
+
+shrubs %>%
+  filter(DISTANCE_m<0| MAJ_DIAM_m<0 |MINOR_DIAM_m<0)
+
+#check for high outliers in distance, check the row for 2.6m and make sure that it is a large shrub
+shrubs %>%
+  filter(DISTANCE_m>2)
+
+#Identifying NA in species and making sure NA exists in no other columns, there are no NAs
+shrubs %>%
+  filter(is.na(SPECIES))
+
+shrubs %>%
+ filter(is.na(COMP) | is.na(PLOT) | is.na(LOCATION_m) | is.na(DISTANCE_m) | 
+          is.na(MAJ_DIAM_m)| is.na(MINOR_DIAM_m)|is.na(HEIGHT_m) |  is.na(STATUS))
+
+#COMP will be either A, B, or C 
+valid_COMP <- 
+  c("A", "B", "C")
+
+shrubs %>%
+  filter(!is.element(COMP, valid_COMP))
+
+#Status will either be L or D 
+valid_status <- 
+  c("L", "D")
+
+shrubs %>%
+  filter(!is.element(STATUS, valid_status))
+
+#specific COMP/PLOT/AZ
+#view(valid_transects)
+head(shrubs)
+#Adding a new column  for transect
+shrubs = shrubs %>%
+  mutate(PLOT = paste0(COMP, "-", 
+                       stringr::str_pad(PLOT, width = 3, side = "left", pad = 0))) %>%
+  mutate(TRANSECT = paste0(PLOT, "-", str_pad(AZ, width = 3, side = "left", pad = 0)), 
+         AZ = as.numeric(AZ)) %>%
+  select(COMP, PLOT, TRANSECT, AZ, SPECIES, STATUS, LOCATION_m, DISTANCE_m, 
+         MAJ_DIAM_m, MINOR_DIAM_m, HEIGHT_m)
+
+#Checking for valid transects
+shrubs %>%
+  filter(!is.element(TRANSECT, valid_transects))
+
+#Checking for missing transects 
+#A- 001 - 000, A - 001 - 090, A- 001 - 180, A - 001 - 270, A- 005 0 270 ; A-021-090 
+#All of these locations have no shrubs in the metadata; rechecked 11-3-20
+valid_transects[!is.element(valid_transects,shrubs$TRANSECT)]
+
+#Location_m is >=0, and <=30 
+shrubs %>%
+  filter(LOCATION_m<0 | LOCATION_m>30)
+
+#check species code is valid, look at unique values and fix any issues 
+unique(shrubs$SPECIES)
+
+#Major diam >= Minor Diam 
+#C- 010- 000 we are highly confident that the crew incorrectly entered the decimal place for the minor diameter so it reads as 15.5 but is actually 1.55; we plan to change this value 
+#B-010-270, c-025-270, B-013-280: we are not confident why this test is not true so we will leave the data as is 
+shrubs %>%
+  filter(MAJ_DIAM_m<MINOR_DIAM_m)
+
+#hand edit specific values
+shrubs[shrubs$TRANSECT == "C-010-000" & shrubs$LOCATION_m == 5.15, "MINOR_DIAM_m"] = 1.55
+shrubs[shrubs$TRANSECT == "C-010-000" & shrubs$LOCATION_m == 5.15, "MINOR_DIAM_m"]
+
+```
+
+## CWD
+
+```{r}
+# tests
+## only valid combinations of COMP:PLOT:AZ
+## location in 0:30
+## DIAMs < DIAMi < DIAMl
+## DIAMi >= 7.6
+## DECAY in c(1, 2, 3, 4, 5)
+## SPECIES in valid species
+## high outliers in diam i
+## high outliers in diam s
+## high outliers in diam l
+## high outliers in length
+
+# only valid combinations of COMP:PLOT:AZ
+#Adding a new column  for transect
+cwd = cwd %>%
+  mutate(PLOT = paste0(COMP, "-", 
+                       stringr::str_pad(PLOT, width = 3, side = "left", pad = 0))) %>%
+  mutate(TRANSECT = paste0(PLOT, "-", str_pad(AZ, width = 3, side = "left", pad = 0)), 
+         AZ = as.numeric(AZ)) %>%
+  select(COMP, PLOT, TRANSECT, AZ, SPECIES, DECAY, LOCATION_m, DIAM_I_cm, DIAM_S_cm, 
+         DIAM_L_cm, LENGTH_m)
+
+#Checking for valid transects
+cwd %>%
+  filter(!is.element(TRANSECT, valid_transects))
+
+# Checking for missing transects 
+# A-24-00: no CWD comment in plot metadata
+# C-26-00: no CWD comment in plot metadata
+# A-24-90: no CWD comment in plot metadata
+valid_transects[!is.element(valid_transects,cwd$TRANSECT)]
+
+# location in 0:30
+cwd %>% filter(LOCATION_m < 0 | LOCATION_m > 30) # no fails
+
+# DIAMs < DIAMi < DIAMl
+cwd %>% filter(!(DIAM_S_cm <= DIAM_L_cm &
+                 DIAM_S_cm <= DIAM_I_cm &
+                 DIAM_I_cm <= DIAM_L_cm)) # 97 fails, break it up:
+
+cwd %>% filter(!(DIAM_S_cm <= DIAM_I_cm)) # 26 obs where S > I
+cwd %>% filter(!(DIAM_S_cm <= DIAM_L_cm)) # 3 obs where S > L
+cwd %>% filter(!(DIAM_I_cm <= DIAM_L_cm)) # 73 obs where I > L
+
+## i do remember some confusion during training about measuring diam_i always 
+## orthogonal to the main axis, rather than along the transect. That could 
+## account for diams at intersection > large end diams. 
+## UPDATE: AFter conferring with crew, it sounds like it was fairly common for 
+## pieces to be wider towards the center (where the cylinder is reasonably whole)
+## than at the "large end" which was often damaged. These might complicate 
+## carbon stock estimates using the large/small/length abbroach to volume estimation, 
+## but shouldn't be a problem for estimating fuel loads from the intersection. 
+
+ggplot(data = cwd,
+       aes(x = DIAM_I_cm, y = DIAM_L_cm))+
+  geom_point()+
+  coord_fixed()+
+  geom_abline(intercept = 0, slope = 1, color ='red') # IDK this looks mostly ok, 
+## could just be regular measurement error? 
+
+## the 3 obs where S > L look like just swappwed around columns, not a big 
+## deal for carbon calculations. The idea that in 25% of the observations 
+## diam at intersection > large end diameter is concerning, esp given the 
+## confusion viz. orthogonal vs. along-transect diameters at intersection. 
+## However, plotting the data makes it look like just normal measurement 
+## error - the relationship between diam_i and diam_l is fuzzy in both directions.
+## Not going to update any of these values now; check with Battles whether his 
+## biomass equations need small end < large end or if they just need 
+## diam for end 1 and end 2
+## update; see note above its NBD
+
+# DIAMi >= 7.6
+cwd %>% filter(DIAM_I_cm < 7.6) # 1 fail, with diam == 2.8. Given the small 
+# and large ends, i'm reasonably sure its a typo and supposed to be 20.8. 
+cwd[cwd$COMP=='C'& cwd$PLOT=='10'&cwd$AZ=='0'&round(cwd$LOCATION_m,1)==20.7,'DIAM_I_cm'] = 20.8
+
+# pretty sure the protocol calls for DIAMs and DIAMl to also be >= 7.6
+cwd %>% filter(DIAM_S_cm < 7.6)
+cwd %>% filter(DIAM_L_cm < 7.6)
+## these all look like valid observations given the diameter at intersection; 
+## i'm going to assume the crews messed up and meaured diamter of a broken 
+## off bit instead of truncating at 7.6. leave as-is (because we don't know 
+## how much to truncate the length)
+
+
+# DECAY in c(1, 2, 3, 4, 5)
+cwd %>% filter(!is.element(DECAY, c(1, 2, 3, 4, 5))) # no fails
+
+
+# SPECIES in valid species
+unique(cwd$SPECIES)
+
+## make some more standardized species codes
+valid_cwd_spp = c('ABCO', 'CADE', 'PILA', 'PIPO', 'PSME', 'NODE', 'QUKE',
+                  'FIR', 'PINE', 'HARDWOOD', 'CONIFER', 'UNK')
+
+## maap the standardized codes to teh existing ones
+cwd_spp_mapping = 
+  data.frame(map_from = c('UC', 'IC', 'FIR', 'CADE', 'U', 'PIPO', 'PSME', 
+                          'UP', 'PILA', 'UF', 'ABCO', 'UH', 'NODE', 'QUKE'),
+             map_to = c('CONIFER', 'CADE', 'FIR', 'CADE', 'UNK', 'PIPO', 'PSME',
+                        'PINE', 'PILA', 'FIR', 'ABCO', 'HARDWOOD', 'NODE', 'QUKE')) %>%
+  mutate(map_from = as.character(map_from),
+         map_to = as.character(map_to))
+
+## convert to the standardized codes
+cwd = 
+  cwd %>%
+  left_join(.,
+            cwd_spp_mapping,
+            by = c('SPECIES' = 'map_from')) %>%
+  mutate(SPECIES = map_to) %>%
+  select(-map_to)
+  
+
+
+# high outliers in diam i
+ggplot(data = cwd,
+       aes(x = DIAM_I_cm))+
+  geom_histogram()+
+  geom_boxplot(aes(y = -7), width = 5)+
+  theme_minimal() # looks fine; if any slightly under skewed
+
+## high outliers in diam s
+ggplot(data = cwd,
+       aes(x = DIAM_S_cm))+
+  geom_histogram()+
+  geom_boxplot(aes(y = -7), width = 5)+
+  theme_minimal() # more skewed but OK for CWD
+
+## high outliers in diam l
+ggplot(data = cwd,
+       aes(x = DIAM_L_cm))+
+  geom_histogram()+
+  geom_boxplot(aes(y = -7), width = 5)+
+  theme_minimal() # also all looks plausible, nothing over 1m
+
+## high outliers in length
+ggplot(data = cwd,
+       aes(x = LENGTH_m))+
+  geom_histogram()+
+  geom_boxplot(aes(y = -7), width = 5)+
+  theme_minimal() # looks good; 15m very long but plausible
+
+```
+
+## Trees
+
+```{r}
+
+# tests:
+## only valid combinations of comp-plot
+## location in valid domain (0 <= location <= 15)
+## status is L or D
+## DBH > 0
+## if tree outside of the 1m sub-belt, DBH >= 11.43
+## tree within a belt
+## Height > 1.3
+## if status is live, !isna(htcb) & (height > htcb) & (htcb > 0)
+## if status is dead, !isna(decay) & decay in c(1, 2, 3, 4, 5)
+## species in valid set
+## TS in c(NW, NE, SW, SE, EN, ES, WN, WS)
+## check for high outliers in DBH
+## check for high outliers in height
+## check for outliers (among live trees) of dbh:height relationship
+
+
+head(trees)
+# only valid combinations of comp-plot
+#Adding a new column  for transect
+trees = trees %>%
+  mutate(PLOT = paste0(COMP, "-", 
+                       stringr::str_pad(PLOT, width = 3, side = "left", pad = 0))) %>%
+  mutate(TAG = as.character(TREE),
+         TREEID = paste0(PLOT,
+                         '-',
+                         TS,
+                         '-',
+                         LOCATION,
+                         '-',
+                         DISTANCE)) %>%
+  select(COMP, PLOT, TREEID, TAG, STATUS, SPECIES, TS, LOCATION, DISTANCE, 
+         dbh_cm = DBH, height_m = HEIGHT, htcb_m = HTCB,
+         decay = DECAY)
+
+#Checking for valid plots
+trees %>%
+  filter(!is.element(PLOT, valid_plots))
+
+# this tree is located in the middle of the trelist for B-26 in the source 
+# datasheet; fix the typo:
+trees[trees$COMP=='B'&trees$PLOT=='B-023'&trees$TREEID=='B-023-EN-9.7-0.7','PLOT'] = 'B-026'
+trees[trees$COMP=='B'&trees$TREEID=='B-023-EN-9.7-0.7','TREEID'] = 'B-026-EN-9.7-0.7'
+trees %>%
+  filter(!is.element(PLOT, valid_plots))
+
+#Checking for missing transects 
+#A- 001 - 000, A - 001 - 090, A- 001 - 180, A - 001 - 270, A- 005 0 270 ; 
+#All of these locations have no shrubs in the metadata up to date July 20, 2020
+valid_plots[!is.element(valid_plots,trees$PLOT)]
+
+
+# location in valid domain
+trees %>% filter(LOCATION < 0 | LOCATION > 15) # no fails
+
+# status is l or d
+trees %>% filter(!is.element(STATUS, c('L', 'D'))) # no fails
+
+# DBH > 0 
+trees %>% filter(dbh_cm <= 0) # no fails
+
+# tree within belt
+trees %>%
+  filter(
+    # show trees that aren't in the belt, where in the belt means:
+    !(
+      # either (location <= 15 and distance <= 5), or 
+      # (location <= 5 and distance <= 15)
+      (LOCATION <= 15 & DISTANCE <= 5) | (LOCATION <= 5 & DISTANCE <= 15)
+    )
+  ) # no failures
+
+
+# if tree not within sub-belt, DBH >= 11.4
+trees %>% 
+  
+  filter(
+    # show trees that aren't in the belt, where in the belt means:
+    !(
+      # either (location <= 15 and distance <= 5), or 
+      # (location <= 5 and distance <= 15)
+      (LOCATION <= 15 & DISTANCE <= 1) | (LOCATION <= 1 & DISTANCE <= 15)
+    ) & dbh_cm < 11.4
+    
+  ) 
+# 1 fail; either distance is a typo 
+## (should be 0.19?), DBH is a typo (should be 19?) or the crew accidentally 
+## included a tree which was too far away. Without other info, take the 
+## data at face value (tree is too small & too far off transect to be included) 
+## so drop it:
+trees = 
+  trees %>% 
+  filter(# keep only trees which are in the sub-belt, or geq 11.4cm
+        ((LOCATION <= 15 & DISTANCE <= 1) | (LOCATION <= 1 & DISTANCE <= 15)) | 
+          dbh_cm >= 11.4)
+
+
+# height > 1.4
+trees %>% filter(height_m < 1.4) # no fails
+
+# if status is live, !isna(htcb) & (height > htcb) & (htcb > 0)
+trees %>% filter(STATUS == 'L' & ((is.na(htcb_m))| !(height_m > htcb_m) | !(htcb_m > 0)))
+
+# four trees with decay and no HTCB, but marked as live. These are almost definitely 
+# dead trees with typo status. fix the statuses:
+trees[trees$STATUS=='L' & is.na(trees$htcb_m) & !is.na(trees$decay), 'STATUS'] = 'D'
+
+# if status is dead, !isna(decay) & decay in c(1, 2, 3, 4, 5)
+trees %>% filter(STATUS == 'D' & (!is.element(decay, c(1, 2, 3, 4, 5)))) # no fails
+
+# species in valid set
+unique(trees$SPECIES)
+valid_tree_spp = c('ABCO', 'CADE', 'QUKE', 'PILA', 'PIPO', 
+                   'PSME', 'NODE', 'SEGI', 
+                   'ARME', 'CHCH', 'CONU')
+
+trees %>% filter(!is.element(SPECIES, valid_tree_spp)) # one 'A' and a bunch of 'U'
+# 'U' is clearly unknown (and all of those are decayed snags). Not sure what 
+# 'A' is; probably ABCO but could be ARME? No comment in metadata. Row above 
+# it in the source spreadsheet is an ABCO, so either the crew expected it to 
+# autofill (and it didnt) or it tried to autofill and they deleted it to 
+# code ARME...
+# going to assume ABCO
+trees[trees$COMP=='C' & trees$PLOT=='22' & trees$LOCATION == 9.6 & trees$DISTANCE==0.2,
+      'SPECIES'] = 'ABCO'
+
+# TS in c(NW, NE, SW, SE, EN, ES, WN, WS)
+trees %>% filter(!is.element(TS, c('NW', 'NE', 'SW', 'SE', 'EN', 'ES', 'WN', 'WS')))
+
+
+# check for high outliers in DBH
+ggplot(data = trees, 
+       aes(x = dbh_cm))+
+  geom_histogram()+
+  geom_boxplot(aes(y = -10),
+               width = 7)+
+  theme_minimal() # looks fine
+
+# check for high outliers in height
+ggplot(data = trees, 
+       aes(x = height_m))+
+  geom_histogram()+
+  geom_boxplot(aes(y = -10),
+               width = 7)+
+  theme_minimal() # looks fine
+
+
+## check for outliers (among live trees) of dbh:height relationship
+ggplot(data = trees %>% filter(STATUS=='L'), 
+       aes(x = dbh_cm, y = height_m, color = SPECIES))+
+  geom_point()+
+  theme_minimal()+
+  geom_abline(intercept = 0, slope = 0.2, lty = 'dashed', color = 'red')+
+  scale_color_viridis_d() # a few samples with very low height for their DBH
+
+trees %>% 
+  filter(STATUS == 'L' & height_m < 5 & dbh_cm > 20)
+# low heights for hardwoods make sense, leave as-is
+
+
+```
+
+
+## Presence/absence
+
+```{r}
+head(pres_abs)
+head(pres_abs_2)
+
+# first off, join the tables
+pres_abs = 
+  rbind(pres_abs,
+        pres_abs_2)
+
+# tests
+## valid combinations of comp/plot/az
+## valid combinations of comp/plot/az/location
+## location in valid range
+## LD/FWD/CWD/SHRUB either 0 or 1 (no NAs)
+## CANOPY either NA, 0, or 1
+
+# fix a lowercase c comp which was discovered below:
+pres_abs = pres_abs %>% mutate(COMP = ifelse(COMP=='c', 'C', COMP))
+
+## ditch the all-NA rows; crews copypasted location template too many times
+## don't ditch the observations from b-8-270 where they didn't copy the ID
+## info...
+pres_abs = pres_abs %>% filter(!(is.na(LD)&is.na(FWD)&is.na(CWD)&is.na(SHRUB)))
+
+## for the 290 remaining rows, these are all from B-8-270
+pres_abs = 
+  pres_abs %>%
+  mutate(COMP = ifelse(is.na(COMP)&is.na(PLOT)&is.na(AZ),
+                       'B',
+                       COMP),
+         PLOT = ifelse(is.na(PLOT)&is.na(AZ),
+                       '8',
+                       PLOT),
+         AZ = ifelse(is.na(AZ),
+                       '270',
+                       AZ))
+
+pres_abs = pres_abs %>%
+  mutate(PLOT = paste0(COMP, "-", 
+                       stringr::str_pad(PLOT, width = 3, side = "left", pad = 0))) %>%
+  mutate(TRANSECT = paste0(PLOT, "-", str_pad(AZ, width = 3, side = "left", pad = 0)), 
+         AZ = as.numeric(AZ), 
+         Displacement_m = LOCATION, 
+         LOCATION = paste0(TRANSECT, "-", LOCATION)) %>%
+  select(COMP, PLOT, TRANSECT, LOCATION, AZ, Displacement_m, 
+         LD, FWD, CWD, SHRUB, CANOPY)
+
+#confirm all of our LOCATION - All of the correct combinations of COMP, PLOT, TRANSECT, LOCATION
+valid_plots = c("A-001", "A-003", "A-005", "A-023", "A-025", "A-020", "A-024", 
+                "A-028", "B-008", "B-013", "B-010", "B-016", "B-026", "C-010", 
+                "C-011", "C-025", "C-026", "C-022")
+
+valid_locations <- 
+  expand.grid(valid_plots, 
+              c("000", "090", "180", "270"), 
+              c(seq(from = 0, to = 29.9, by = 0.1))) %>%
+  select(PLOT = Var1, TRANSECT = Var2, Displacement_m = Var3) %>%
+  mutate(LOCATION = paste0(PLOT, "-", TRANSECT, "-", Displacement_m))
+
+#Selecting the location column from the table to use 
+#view(valid_locations)
+valid_locations = valid_locations$LOCATION
+
+#Checking for extra locations 
+pres_abs %>%
+  filter(!is.element(LOCATION, valid_locations))
+
+#Checking for missing locations 
+valid_locations[!is.element(valid_locations,pres_abs$LOCATION)]
+# theres are all out-of-bounds locations
+
+
+# checking allowable values; should be 0, 1, or NA. There will be some 
+# NAs in the various surface columns on locations which were obstructed. 
+# Lots of NAs expected inthe canopy column because only measured 1 per meter 
+# (1 per 10 rows)
+summary(pres_abs %>% select(LD, FWD, CWD, SHRUB, CANOPY))
+
+# there's '11's in LD and FWD which should definitely be 1s;
+# also call everything > 0 in CANOPY a 1
+# and convert all columns to logical
+pres_abs = 
+  pres_abs %>% 
+  mutate(LD = ifelse(LD>0, TRUE, FALSE),
+         FWD = ifelse(FWD>0, TRUE, FALSE),
+         CWD = ifelse(CWD>0, TRUE, FALSE),
+         SHRUB = ifelse(SHRUB>0, TRUE, FALSE),
+         CANOPY = ifelse(CANOPY>0, TRUE, FALSE))
+summary(pres_abs %>% select(LD, FWD, CWD, SHRUB, CANOPY))
+
+```
+
+# Write outputs
+
+```{r}
+write.csv(litter_duff,
+          here::here('02-data', '01-cleaned', 'litter_duff.csv'),
+          row.names = FALSE)
+
+write.csv(fwd_tallies,
+          here::here('02-data', '01-cleaned', 'fwd_tallies.csv'),
+          row.names = FALSE)
+
+
+write.csv(fwd_diams,
+          here::here('02-data', '01-cleaned', 'fwd_diams.csv'),
+          row.names = FALSE)
+
+
+write.csv(shrubs,
+          here::here('02-data', '01-cleaned', 'shrubs.csv'),
+          row.names = FALSE)
+
+
+write.csv(cwd,
+          here::here('02-data', '01-cleaned', 'cwd.csv'),
+          row.names = FALSE)
+
+
+write.csv(trees,
+          here::here('02-data', '01-cleaned', 'trees.csv'),
+          row.names = FALSE)
+
+
+write.csv(pres_abs,
+          here::here('02-data', '01-cleaned', 'pres_abs.csv'),
+          row.names = FALSE)
+
+
+write.csv(plot_metadata,
+          here::here('02-data', '01-cleaned', 'plot_metadata.csv'),
+          row.names = FALSE)
+
+```
+
+
+#Data Exploration 
+```{r eval = FALSE}
+#Zurr graphs for littler/duff, FWD tallies, FWD diam, CWD or just focus on 1 or 2 tables and do good job 
+
+#Litter and Duff
+head(litter_duff)
+    
+ggplot(litter_duff, aes(x=LOCATION, y =DUFF_cm)) +
+  geom_point(aes(col=COMP)) + 
+  labs(y="Duff depth (cm)", x= "Location")
+
+ggplot(litter_duff, aes(x=as.factor(LOCATION), y =DUFF_cm)) +
+  geom_boxplot() + 
+  labs(y="Duff depth (cm)", x= "Location")
+
+ggplot(litter_duff, aes(x =DUFF_cm)) +
+  geom_histogram()
+
+ggplot(litter_duff, aes(x=LOCATION, y =LITTER_cm)) +
+  geom_boxplot(aes(col=COMP)) + 
+  labs(y="Litter depth (cm)", x= "Location")
+
+ggplot(litter_duff, aes(x=LOCATION, y =LITTER_cm)) +
+  geom_point(aes(col=COMP)) + 
+  labs(y="Litter depth (cm)", x= "Location")
+
+ggplot(litter_duff, aes(x =LITTER_cm)) +
+  geom_histogram()
+
+#FWD Tallies
+head(fwd_tallies_long)
+head(fwd_tallies)
+
+ggplot(fwd_tallies, aes(x=LOCATION, y = a1h)) + 
+  geom_boxplot(aes(col=COMP)) + 
+  labs(y="A1h", x = "Location")
+
+ggplot(fwd_tallies, aes(x=LOCATION, y = a1h)) + 
+  geom_point(aes(col=COMP))
+
+ggplot(fwd_tallies, aes(x=a1h)) +
+  geom_histogram()
+
+ggplot(fwd_tallies_long, aes(x=LOCATION, y = count)) + 
+  geom_boxplot(aes(col=fuel_type)) + 
+  labs(y="Count", x = "Location")
+
+ggplot(fwd_tallies_long, aes(x=LOCATION, y = count)) + 
+  geom_point(aes(col=fuel_type))
+
+ggplot(fwd_tallies_long, aes(x =count)) +
+  geom_histogram()
+
+
+```
+
+
+##Scratch work 
+
+```{r eval = FALSE}
+#base R way to delete columns, everything before common is which rows to select and everything after common is which columns to select 
+
+#this is how to pick which rows
+fwd_tallies.A = 
+  fwd_tallies[fwd_tallies$COMP == "A",]
+
+#this is how to pick which columns
+#fwd_tallies.clean = 
+  #fwd_tallies[, c("COMP", "PLOT", "AZ", "LOCATION", #"a1h", "a10h", "a100h", "b1h", "b10h", "b100h")]
+
+#tidyverse way to pick columns/rows 
+fwd_tallies.B = 
+  filter(fwd_tallies, COMP =="B")
+
+fwd_tallies.B2 = 
+  select(fwd_tallies.B, c(a1h, a10h, a100h))
+head(fwd_tallies.B2)
+
+fwd_tallies.B3 = 
+  fwd_tallies %>% 
+  filter(COMP == "B") %>%
+  select(c(a1h, a10h, a100h))
+
+head(fwd_tallies.B3)
+#pipes try to automatically figure out which argument you are calling to, you can direct with a period 
+
+head(cwd)
+
+fwd_tallies_long <- 
+  pivot_longer(fwd_tallies.clean, cols= c("a1h", "a10h", "a100h", "b1h", "b10h", "b100h"), names_to = "fuel_type", values_to = "count")
+
+head(fwd_tallies_long)
+#head(cwd_location,100)
+#cwd_location <- 
+  #cwd %>% 
+  #select(COMP, PLOT, AZ) %>%
+  #expand(nesting(COMP, PLOT), AZ)
+  
+#cwd %>%
+#group_by(COMP, PLOT, AZ) %>%
+#arrange(LOCATION_m, .by_group = TRUE) %>%
+#summarise(ssd_cm2 = sum((DIAM_I_cm)^2)) %>% 
+#ungroup()
+```
+

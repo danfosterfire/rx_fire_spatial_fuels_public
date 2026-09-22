@@ -1,0 +1,775 @@
+---
+title: "Notes for Perry"
+output: 
+  html_document:
+      code_folding: hide
+---
+
+```{r}
+
+library(here)
+library(tidyverse)
+
+litter_data = 
+  readRDS(here::here('02-data',
+                     '02-for_analysis',
+                     'litter_data.rds'))
+
+duff_data = 
+  readRDS(here::here('02-data',
+                     '02-for_analysis',
+                     'duff_data.rds'))
+
+fwd1h_data = 
+  readRDS(here::here('02-data',
+                     '02-for_analysis',
+                     'fwd1h_data.rds'))
+
+fwd10h_data = 
+  readRDS(here::here('02-data',
+                     '02-for_analysis',
+                     'fwd10h_data.rds'))
+
+fwd100h_data = 
+  readRDS(here::here('02-data',
+                     '02-for_analysis',
+                     'fwd100h_data.rds'))
+
+burn_units = 
+  readRDS(here::here('02-data',
+                     '02-for_analysis',
+                     'burn_units.rds'))
+
+plot_centers = 
+  readRDS(here::here('02-data',
+                     '02-for_analysis',
+                     'plot_centers.rds'))
+```
+
+# Context
+
+**Big picture:**
+
+  - Wildland fuels are the combustible biomass that fuels wildland fires. Fuels 
+  are often divided into several types of "fuel components" (e.g. duff, litter, 
+  fine woody debris, coarse woody debris, understory vegetation, canopy fuels).
+  - Current operational (i.e., useful for predicting fires in real time) fire 
+  models ignore fine-scale heterogeneity in fuel conditions, and predict fire 
+  behavior using basic summary statistics (e.g. mean biomass per area) for 
+  the modeled area (often a 30x30m pixel). Computational 
+  fluid dynamics models are fire models that do include fine-scale heterogeneity 
+  in fuel conditions and atmosphere/fire feedbacks, but run slower than real 
+  time and so are useful mostly for research.
+  - Research and theory suggest that fine-scale heterogeneity in fuel conditions 
+  does affect fire behavior at coarser scales
+  - We've been funded by the Pyregence consortium to develop a system for 
+  sampling and describing fuel conditions that will supply input data for 
+  a new fire model in development by researchers at the US Forest Service. The 
+  new model is to incorporate fine-scale heterogeneity in fuel conditions, among 
+  other innovations. 
+  - The ultimate goal is to develop a system for field sampling and data analysis 
+  that will capture information about the fine-scale spatial distribution of 
+  combustible biomass to enable realistic predictions of wildfire behavior. 
+  - Ideally, we would like to accomplish this goal by developing spatially-explicit 
+  statistical models for different fuel components (e.g. litter, woody 
+  debris, understory vegetation). By defining a common statistical model and 
+  allowing the parameters to vary by ecosystem, we could generate simulated 
+  fuelbeds with realistic spatial properties for input into the fire model. A 
+  parametric statistical model also opens up avenues for research, such as comparisons 
+  among ecosystems. 
+  - As a fallback, the sampling design is intended to allow for directly using 
+  the observed data to map fuel conditions at a fine scale. We could plug the 
+  observed data into the fire model directly, skipping the statistical analysis and 
+  simulation steps. This may be necessary for some fuel components which are 
+  difficult to model well. In a mixture of the two approaches, kriging would be used to 
+  fill the spatial gaps between observations for some fuel components. 
+
+**This paper:**
+
+  - I'm also interested in the fine-scale spatial pattern of biomass as an 
+  important and understudied axis of forest structure. Fire is an important 
+  ecological process in the ecosystem I study (Californian mixed conifer 
+  forests), and research shows that fire alters the loading (amount) of biomass 
+  of several fuel components. My hypothesis is that fire will also alter the 
+  fine-scale spatial distribution of biomass.
+  - We used a prescribed fire study happening and Blodgett Forest Research 
+  Station as a test-bed for the sampling protocol and spatial statistical 
+  analysis we're delivering for the pyregence grant. By sampling and 
+  describing the fine-scale spatial pattern of fuels before and after a 
+  prescribed fire treatment, we can also test whether the prescribed fire 
+  affects the fine-scale spatial pattern.
+  - This paper will focus on duff, litter, and fine woody debris (FWD), which are the 
+  fuel components most strongly affected by prescribed fires and the easiest 
+  to model. 
+
+# Data collection
+
+  - 19 inventory plots were spread across 3 experimental units (. Plots were 
+  placed on an existing grid used by the research forest:
+  
+```{r echo = FALSE}
+ggplot()+
+  geom_sf(data = burn_units, fill = NA,
+         aes(color = 'Experimental units'), lwd = 1)+
+  geom_sf(data = plot_centers,
+          aes(color = 'Plot centers'))+
+  theme_minimal()+
+  #ggspatial::annotation_scale()+
+  scale_color_manual(values = c('Plot centers' = 'red',
+                                'Experimental units' = 'black'))+
+  theme(legend.title = element_blank())+
+  coord_sf(datum = sf::st_crs('EPSG:26910'))+
+  labs(x = 'Easting (m)', y = 'Northing (m)')
+
+```
+
+  - On each plot:
+    - The depth of litter and duff was measured (to nearest 0.5 cm) at 64 
+    predetermined subsample locations.
+    - FWD particles (in 3 size classes) intersecting 
+    a 1m subtransect were counted at 32 predetermined subsample locations.
+  - The spatial arrangements of subsample locations within each plot were 
+  designed to get good coverage of pairwise distances between subsamples in 
+  the range 0.1m - 60m for litter/duff and the range 1m-60m for FWD. Variogram 
+  analysis from other forest and rangeland ecosystems in the western US 
+  suggests that most spatial correlation is within a distance of ~1m for 
+  litter/duff and within ~5m for FWD. Here are histograms of the pairwise 
+  distances for a single plot:
+
+```{r echo = FALSE}
+dist(litter_data$coords) %>% as.matrix() %>% as.vector() %>% 
+  hist(main = 'Histogram of Litter/duff subsample pairwise distances')
+
+dist(fwd1h_data$coords) %>% as.matrix() %>% as.vector() %>% 
+  hist(main = 'Historgam of FWD subsample pariwise distances')
+
+```
+
+  - Fuels were inventoried both before and after prescribed burns of the 
+  three experimental units. The three burns took place on separate days.
+
+# Data exploration
+
+## Duff
+
+Histogram of duff depths, rounded to the nearest cm:
+
+```{r}
+duff_data$X %>%
+  as_tibble() %>%
+  mutate(depth_cm = duff_data$Y) %>%
+  ggplot(aes(x = depth_cm))+
+  geom_bar()+
+  theme_minimal()+
+  labs(title = 'Duff')
+
+```
+
+Boxplot crossing timestep (pre/post burn) with experimental unit (A, B, or C):
+
+```{r}
+
+
+duff_data$X %>%
+  as_tibble() %>%
+  mutate(depth_cm = duff_data$Y,
+         timestep = 
+           factor(ifelse(timePost==0,'pre', 'post'),
+                  levels = c('pre', 'post')),
+         comp = ifelse(compB==0&compC==0,
+                       'A',
+                       ifelse(compB==1,
+                              'B',
+                              'C'))) %>%
+  ggplot(aes(x = depth_cm))+
+  geom_bar()+
+  facet_grid(timestep~comp, scales = 'free_y')+
+  theme_minimal()+
+  labs(title = 'Duff')
+
+```
+
+## Litter
+
+Histogram of litter depths, rounded to the nearest cm:
+
+```{r}
+litter_data$X %>%
+  as_tibble() %>%
+  mutate(depth_cm = litter_data$Y) %>%
+  ggplot(aes(x = depth_cm))+
+  geom_bar()+
+  theme_minimal()+
+  labs(title = 'Litter')
+
+```
+
+Boxplot crossing timestep (pre/post burn) with experimental unit (A, B, or C):
+
+```{r}
+
+litter_data$X %>%
+  as_tibble() %>%
+  mutate(depth_cm = litter_data$Y,
+         timestep = 
+           factor(ifelse(timePost==0,'pre', 'post'),
+                  levels = c('pre', 'post')),
+         comp = ifelse(compB==0&compC==0,
+                       'A',
+                       ifelse(compB==1,
+                              'B',
+                              'C'))) %>%
+  ggplot(aes(x = depth_cm))+
+  geom_bar()+
+  facet_grid(timestep~comp, scales = 'free_y')+
+  theme_minimal()+
+  labs(title = 'Litter')
+
+
+```
+
+
+
+
+## FWD: 1-hour
+
+1-hour fuels are FWD particles with diameters from 0-0.64cm. 
+
+```{r}
+fwd1h_data$X %>%
+  as_tibble() %>%
+  mutate(count = fwd1h_data$Y) %>%
+  ggplot(aes(x = count))+
+  geom_bar()+
+  theme_minimal()+
+  labs(title = 'FWD 1-hour')
+
+
+fwd1h_data$X %>%
+  as_tibble() %>%
+  mutate(count = fwd1h_data$Y,
+         timestep = 
+           factor(ifelse(timePost==0,'pre', 'post'),
+                  levels = c('pre', 'post')),
+         comp = ifelse(compB==0&compC==0,
+                       'A',
+                       ifelse(compB==1,
+                              'B',
+                              'C'))) %>%
+  ggplot(aes(y = count, x = timestep))+
+  geom_boxplot()+
+  facet_wrap(~comp, nrow = 1)+
+  theme_minimal()+
+  labs(title = 'FWD 1-hour')
+
+
+```
+
+## FWD: 10-hour
+
+10-hour fuels are FWD particles with diameters from 0.64-2.54 cm.
+
+```{r}
+fwd10h_data$X %>%
+  as_tibble() %>%
+  mutate(count = fwd10h_data$Y) %>%
+  ggplot(aes(x = count))+
+  geom_bar()+
+  theme_minimal()+
+  labs(title = 'FWD 10-hour')
+
+
+fwd10h_data$X %>%
+  as_tibble() %>%
+  mutate(count = fwd10h_data$Y,
+         timestep = 
+           factor(ifelse(timePost==0,'pre', 'post'),
+                  levels = c('pre', 'post')),
+         comp = ifelse(compB==0&compC==0,
+                       'A',
+                       ifelse(compB==1,
+                              'B',
+                              'C'))) %>%
+  ggplot(aes(y = count, x = timestep))+
+  geom_boxplot()+
+  facet_wrap(~comp, nrow = 1)+
+  theme_minimal()+
+  labs(title = 'FWD 10-hour')
+
+```
+
+## FWD: 100-hour
+
+100-hour fuels are FWD particles with diameters from 2.54-7.62 cm.
+
+```{r}
+fwd100h_data$X %>%
+  as_tibble() %>%
+  mutate(count = fwd100h_data$Y) %>%
+  ggplot(aes(x = count))+
+  geom_bar()+
+  theme_minimal()+
+  labs(title = 'FWD 100-hour')
+
+
+fwd100h_data$X %>%
+  as_tibble() %>%
+  mutate(count = fwd100h_data$Y,
+         timestep = 
+           factor(ifelse(timePost==0,'pre', 'post'),
+                  levels = c('pre', 'post')),
+         comp = ifelse(compB==0&compC==0,
+                       'A',
+                       ifelse(compB==1,
+                              'B',
+                              'C'))) %>%
+  ggplot(aes(y = count, x = timestep))+
+  geom_boxplot()+
+  facet_wrap(~comp, nrow = 1)+
+  theme_minimal()+
+  labs(title = 'FWD 100-hour')
+
+
+
+```
+
+# Analysis
+
+## Model Descriptions
+
+### Litter+duff depths
+
+The model for litter and/or duff depths is:
+
+$$Y_i \sim \text{NegBinomial}(\mu_i, \kappa)$$
+
+where:
+
+  - $Y_i$ is the observed depth of litter or duff at observation $i$ in 
+  centimeters, rounded to the nearest cm
+  - $\mu_i$ is the unobserved mean depth at observation $i$
+  - $\kappa$ is the negative binomial dispersion parameter, here assumed constant 
+  across all samples
+  
+$$\text{log}(\mu_i) = \textbf{X}_i\beta + \textbf{GPPRE}_{l,p} IPRE_i + 
+\textbf{GPPOST}_{l,p} IPOST_i +b_{p}$$
+
+where:
+
+  - $\textbf{X}_i$ is the *i*th row of the design matrix of fixed effects covariates.
+  The fixed effects covariates are for experimental unit (A, B, or C) crossed 
+  with timestep (pre or post), so there are 6 main effects (Intercept = A:Pre,
+  main effect B, main effect C, main effect Post, B:Post,  and C:Post).
+  - $\beta$ are the 6 coefficients for the fixed effects
+  - $\textbf{GPPRE}$ is an $L\times P$ matrix of realized gaussian process random effects, 
+  with $L$ rows for the within-plot spatial locations and $P$ columns 
+  for the plots. $l$ is the index of the location for the 
+  observation $i$ and $p$ is the index for the plot of of the observation $i$. 
+  - $IPRE_i$ is a dummy variable (1 if true, 0 if false) coding 
+  whether observation *i* is from the preburn timestep and controlling whether 
+  the pre-burn gaussian process random effect $\textbf{GPPRE}_{l_i,p_i}$ is 
+  included in the linear predictor $\mu_i$.
+  - $\textbf{GPPOST}$ and $IPOST_i$ are likewise the matrix of 
+  gaussian process random effects and an indicator variable for the postburn 
+  timestep. 
+  - $b$ is a vector of normally distributed random effects for the plots, 
+  $b \sim \text{Normal}(0,\sigma_{plot}^2)$, and $b_{p}$ is the random effect 
+  for plot $p$, the plot associated with observation $i$.
+  
+$$\textbf{GPPRE}_{1:L,p} \sim \text{MVN}(0,\Sigma_{PRE})$$
+
+where:
+
+  - $\Sigma_{PRE}$ is the $L$ by $L$ covariance matrix of sample locations within 
+  a plot. The gaussian process parameters, and thus the covariance matrix, 
+  are constant across plots. 
+  
+$$\Sigma_{PRE} = \alpha_{PRE}^2 \text{exp}(\frac{-D^2}{2\rho_{PRE}^2})$$
+
+where:
+
+  - $\alpha_{PRE}$ is the standard deviation of the gaussian process random 
+  effect for the preburn timestep, controlling the magnitude of the spatial effect
+  - $D^2$ is the $L$ by $L$ matrix of squared distances among all sample locations
+  in a plot
+  - $\rho_{PRE}$ is the length-scale parameter of the gaussian process random effect 
+  the breburn timestep, 
+  controlling the rate at which the correlation between observations decays 
+  as the distance between them increases
+
+The definitions for $\textbf{GPPOST}$, $\Sigma_{POST}$, $\alpha_{POST}$, and 
+$\rho_{POST}$ are as above.
+
+Stan code for Litter+duff model:
+
+```{stan, eval = FALSE, output.var = 'litterduff_model'}
+
+
+data {
+  int N; // number of observations
+  int P; // number of plots
+  int L; // number of distinct locations within each plot
+  
+  int Y[N]; // observed responses
+  int plot_id[N]; // plot IDs
+  int location_id[N]; // location IDs
+  
+  matrix[N,6] X; // fixed effects design matrix, giving dummy variables for 
+                 // COMP (A, B, or C) crossed with TIMESTEP (pre and post), with 
+                 // A:PRE the intercept
+  
+  int pre[N]; // indicator 1 if pre 0 if post
+  int post[N]; // timestep explanatory variable; 1 if post, 0 otherwise
+  
+  vector[2] coords[L]; // plot-relative coordinates of each subsample
+}
+
+parameters {
+  vector[6] beta; // fixed effect coefficients 
+  matrix[L,P] zGP_pre; // standard-normal deviates for GP effect prefire
+  matrix[L,P] zGP_post; // standard normal deviates for GP effect postfire
+  
+  real<lower=0> alpha_pre; // standard deviation of prefire GP
+  real<lower=0> rho_pre; // length-scales of prefire GP
+  
+  real<lower=0> alpha_post; // standard deviation of postfire GP
+  real<lower=0> rho_post; // length-scale of postfire GP
+  
+  real<lower=0> sigmaPlot; // standard deviation of plot effect
+  vector[P] z_plot; // standard normal deviates for plot effect
+  
+  real<lower=0> kappa; // NB dispersion parameter
+  
+}
+
+transformed parameters {
+
+  vector[P] plot_effect; // atual plot effects
+  
+
+  plot_effect = sigmaPlot * z_plot;
+}
+
+model {
+  // variable declarations
+  vector[N] logmu; // linear predictor
+  matrix[L,P] GP_pre; // actual GP effects for each plot:location
+  matrix[L,P] GP_post; // actual GP effects for postfire
+  matrix[L,L] K_pre; // covariance matrix for within-plot GP (prefire)
+  matrix[L,L] KL_pre; // cholesky decomposition of K_pre
+  matrix[L,L] K_post; // covariance matrix for within-plot GP (postfire)
+  matrix[L,L] KL_post; // cholesky decomposition of K_post
+  
+  // priors
+  beta ~ normal(0, 5);
+  sigmaPlot ~ normal(0, 5);
+  kappa ~ cauchy(0,5);
+  alpha_pre ~ normal(0, 5);
+  alpha_post ~ normal(0, 5);
+  rho_pre ~ inv_gamma(5,40);
+  rho_post ~ inv_gamma(5,40);
+  
+  // random effect realizations
+  z_plot ~ std_normal();
+  to_vector(zGP_pre) ~ std_normal();
+  to_vector(zGP_post) ~ std_normal();
+  
+  // gaussian processse
+  K_pre = gp_exp_quad_cov(coords, alpha_pre, rho_pre);
+  K_pre = add_diag(K_pre, 1e-9);
+  KL_pre = cholesky_decompose(K_pre);
+  GP_pre = KL_pre * zGP_pre;
+  
+  K_post = gp_exp_quad_cov(coords, alpha_post, rho_post);
+  K_post = add_diag(K_post, 1e-9);
+  KL_post = cholesky_decompose(K_post);
+  GP_post = KL_post * zGP_post;
+  
+  // linear predictor
+  for (i in 1:N){
+    logmu[i] = 
+      X[i,] * beta +
+      GP_pre[location_id[i], plot_id[i]] * pre[i] +
+      GP_post[location_id[i], plot_id[i]] * post[i] +
+      plot_effect[plot_id[i]];
+  }
+  
+  // likelihood
+  Y ~ neg_binomial_2_log(logmu, kappa);
+}
+
+```
+
+### FWD counts
+
+The model for FWD counts is identical to that for litter+duff depths, except 
+that
+
+$$\Sigma_{PRE} = \alpha_{PRE}^2 \text{exp}(\frac{-D^2}{2\rho_{PRE}^2})+\textbf{I}\tau_{PRE}$$
+
+where:
+
+  - $\Sigma_{PRE}$, $\alpha_{PRE}$, $D$, and $\rho_{PRE}$ are as defined for the 
+  litter+duff model
+  - $\textbf{I}$ is an $L \times L$ identify matrix with 1s on the diagonal and 
+  0s otherwise
+  - $\tau_{PRE}$ is the noise parameter for the gaussian process random effect, 
+  controlling the covariance between samples which share a common location.
+  
+$\Sigma_{POST}$ likewise has its own noise parameter $\tau_{POST}$.
+
+Stan code for the FWD model:
+
+```{stan, eval = FALSE, output.var = 'fwd_model'}
+
+
+data {
+  int N; // number of observations
+  int P; // number of plots
+  int L; // number of distinct locations within each plot
+  
+  int Y[N]; // observed responses
+  int plot_id[N]; // plot IDs
+  int location_id[N]; // location IDs
+  
+  matrix[N,6] X; // fixed effects design matrix, giving dummy variables for 
+                 // COMP (A, B, or C) crossed with TIMESTEP (pre and post), with 
+                 // A:PRE the intercept
+  
+  int pre[N]; // indicator 1 if pre 0 if post
+  int post[N]; // timestep explanatory variable; 1 if post, 0 otherwise
+  
+  vector[2] coords[L]; // plot-relative coordinates of each subsample
+}
+
+parameters {
+  vector[6] beta; // fixed effect coefficients 
+  matrix[L,P] zGP_pre; // standard-normal deviates for GP effect prefire
+  matrix[L,P] zGP_post; // standard normal deviates for GP effect postfire
+  
+  real<lower=0> alpha_pre; // standard deviation of prefire GP
+  real<lower=0> rho_pre; // length-scales of prefire GP
+  real<lower=0> tau_pre;
+  
+  real<lower=0> alpha_post; // standard deviation of postfire GP
+  real<lower=0> rho_post; // length-scale of postfire GP
+  real<lower=0> tau_post;
+  
+  real<lower=0> sigmaPlot; // standard deviation of plot effect
+  vector[P] z_plot; // standard normal deviates for plot effect
+  
+  real<lower=0> kappa; // NB dispersion parameter
+  
+}
+
+transformed parameters {
+
+  vector[P] plot_effect; // atual plot effects
+  
+
+  plot_effect = sigmaPlot * z_plot;
+}
+
+model {
+  // variable declarations
+  vector[N] logmu; // linear predictor
+  matrix[L,P] GP_pre; // actual GP effects for each plot:location
+  matrix[L,P] GP_post; // actual GP effects for postfire
+  matrix[L,L] K_pre; // covariance matrix for within-plot GP (prefire)
+  matrix[L,L] KL_pre; // cholesky decomposition of K_pre
+  matrix[L,L] K_post; // covariance matrix for within-plot GP (postfire)
+  matrix[L,L] KL_post; // cholesky decomposition of K_post
+  
+  // priors
+  beta ~ normal(0, 5);
+  sigmaPlot ~ normal(0, 5);
+  kappa ~ cauchy(0,5);
+  alpha_pre ~ normal(0, 5);
+  alpha_post ~ normal(0, 5);
+  rho_pre ~ inv_gamma(5,40);
+  rho_post ~ inv_gamma(5,40);
+  tau_pre ~ normal(0, 5);
+  tau_post ~ normal(0, 5);
+  
+  // random effect realizations
+  z_plot ~ std_normal();
+  to_vector(zGP_pre) ~ std_normal();
+  to_vector(zGP_post) ~ std_normal();
+  
+  // gaussian processse
+  K_pre = gp_exp_quad_cov(coords, alpha_pre, rho_pre);
+  K_pre = add_diag(K_pre, tau_pre);
+  KL_pre = cholesky_decompose(K_pre);
+  GP_pre = KL_pre * zGP_pre;
+  
+  K_post = gp_exp_quad_cov(coords, alpha_post, rho_post);
+  K_post = add_diag(K_post, tau_post);
+  KL_post = cholesky_decompose(K_post);
+  GP_post = KL_post * zGP_post;
+  
+  // linear predictor
+  for (i in 1:N){
+    logmu[i] = 
+      X[i,] * beta +
+      GP_pre[location_id[i], plot_id[i]] * pre[i] +
+      GP_post[location_id[i], plot_id[i]] * post[i] +
+      plot_effect[plot_id[i]];
+  }
+  
+  // likelihood
+  Y ~ neg_binomial_2_log(logmu, kappa);
+}
+
+
+
+
+```
+
+### FWD particle diameters
+
+# Results
+
+## Posterior predictive checks
+
+### Duff
+
+```{r}
+knitr::include_graphics('duff_retrodiction1.png')
+
+knitr::include_graphics('duff_retrodiction2.png')
+knitr::include_graphics('duff_retrodiction3.png')
+
+
+
+```
+
+### Litter
+
+
+```{r}
+knitr::include_graphics('litter_retrodiction1.png')
+
+knitr::include_graphics('litter_retrodiction2.png')
+knitr::include_graphics('litter_retrodiction3.png')
+
+
+
+```
+
+### FWD 1h
+
+```{r}
+knitr::include_graphics('fwd1h_retrodiction1.png')
+
+knitr::include_graphics('fwd1h_retrodiction2.png')
+
+
+```
+
+### FWD 10h
+```{r}
+knitr::include_graphics('fwd10h_retrodiction1.png')
+
+knitr::include_graphics('fwd10h_retrodiction2.png')
+```
+
+## Posterior parameter values
+
+### Alpha 
+
+Alpha is the standard deviation of the gaussian process spatial random effect:
+
+```{r}
+knitr::include_graphics('alphas_posteriors.png')
+
+```
+
+### Rho
+
+Rho is the length-scale parameter controlling the range of the gaussian process 
+random effect:
+
+```{r}
+knitr::include_graphics('rhos_posteriors.png')
+
+```
+
+
+### Tau
+
+Tau is the noise parameter describing covariance between samples from the 
+same location (added to the diagonal of the covariance matrix for the GP 
+random effect):
+
+```{r}
+knitr::include_graphics('taus_posteriors.png')
+```
+
+### Beta
+
+The betas are the fixed effect coefficients for timestep (pre or post burn) 
+crossed with experimental unit (A, B, or C):
+
+#### Duff
+
+```{r}
+readRDS(here::here('02-data',
+                   '03-results',
+                   'duff_fit.rds'))$summary(
+                     variables = c('beta[1]', 'beta[2]', 'beta[3]', 'beta[4]',
+                                   'beta[5]', 'beta[6]')
+                   ) 
+
+```
+
+#### Litter
+
+
+```{r}
+readRDS(here::here('02-data',
+                   '03-results',
+                   'litter_fit.rds'))$summary(
+                     variables = c('beta[1]', 'beta[2]', 'beta[3]', 'beta[4]',
+                                   'beta[5]', 'beta[6]')
+                   ) 
+
+```
+
+#### FWD 1-h
+
+
+```{r}
+readRDS(here::here('02-data',
+                   '03-results',
+                   'fwd1h_fit.rds'))$summary(
+                     variables = c('beta[1]', 'beta[2]', 'beta[3]', 'beta[4]',
+                                   'beta[5]', 'beta[6]')
+                   ) 
+
+```
+
+#### FWD 10-h
+
+
+```{r}
+readRDS(here::here('02-data',
+                   '03-results',
+                   'fwd10h_fit.rds'))$summary(
+                     variables = c('beta[1]', 'beta[2]', 'beta[3]', 'beta[4]',
+                                   'beta[5]', 'beta[6]')
+                   ) 
+
+```
+
+#### FWD 100-h
+
+
+```{r}
+readRDS(here::here('02-data',
+                   '03-results',
+                   'fwd100h_fit.rds'))$summary(
+                     variables = c('beta[1]', 'beta[2]', 'beta[3]', 'beta[4]',
+                                   'beta[5]', 'beta[6]')
+                   ) 
+
+```
